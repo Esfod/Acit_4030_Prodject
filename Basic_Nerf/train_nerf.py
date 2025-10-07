@@ -1,5 +1,6 @@
 import torch
 import matplotlib.pyplot as plt
+import time
 
 from pytorch3d.renderer import (
     FoVPerspectiveCameras,
@@ -69,7 +70,7 @@ target_silhouettes = target_silhouettes.to(device)
 neural_radiance_field = neural_radiance_field.to(device)
 
 lr = 1e-3
-optimizer = torch.optim.Adam(neural_radiance_field.parameters(), lr=lr) 
+optimizer = torch.optim.AdamW(neural_radiance_field.parameters(), lr=lr) 
 batch_size = 6
 n_iter = 3000
 
@@ -77,7 +78,7 @@ loss_history_color, loss_history_sil = [], []
 for iteration in range(n_iter):
     if iteration == round(n_iter * 0.75):
         print('Decreasing LR 10-fold ...')
-        optimizer = torch.optim.Adam(
+        optimizer = torch.optim.AdamW(
             neural_radiance_field.parameters(), lr=lr * 0.1
         )
 
@@ -130,6 +131,7 @@ for iteration in range(n_iter):
 
     # Visualize the full renders every 100 iterations.
     if iteration % 100 == 0:
+        
         show_idx = torch.randperm(len(target_cameras))[:1]
         fig = show_full_render(
             neural_radiance_field,
@@ -148,7 +150,7 @@ for iteration in range(n_iter):
             loss_history_color,
             loss_history_sil,
         )
-        fig.savefig(f'intermediate_{iteration}')
+        fig.savefig(f'output/intermediate_{iteration}')
 
 with torch.no_grad():
     rotating_nerf_frames = generate_rotating_nerf(neural_radiance_field, target_cameras, renderer_grid, n_frames=3*5, device=device) 
