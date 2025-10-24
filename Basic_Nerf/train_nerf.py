@@ -72,7 +72,7 @@ neural_radiance_field = neural_radiance_field.to(device)
 lr = 1e-3
 optimizer = torch.optim.AdamW(neural_radiance_field.parameters(), lr=lr) 
 batch_size = 6
-n_iter = 3000
+n_iter = 10000
 
 loss_history_color, loss_history_sil = [], []
 for iteration in range(n_iter):
@@ -152,8 +152,8 @@ for iteration in range(n_iter):
         )
         fig.savefig(f'output/intermediate_{iteration}')
 
-with torch.no_grad():
-    rotating_nerf_frames = generate_rotating_nerf(neural_radiance_field, target_cameras, renderer_grid, n_frames=3*5, device=device) 
+#with torch.no_grad():
+    #rotating_nerf_frames = generate_rotating_nerf(neural_radiance_field, target_cameras, renderer_grid, n_frames=3*5, device=device) 
 
-image_grid(rotating_nerf_frames.clamp(0., 1.).cpu().numpy(), rows=3, cols=5, rgb=True, fill=True)
-plt.show()
+#image_grid(rotating_nerf_frames.clamp(0., 1.).cpu().numpy(), rows=3, cols=5, rgb=True, fill=True)
+#plt.show()
