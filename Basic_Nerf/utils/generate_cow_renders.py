@@ -23,13 +23,10 @@ from pytorch3d.renderer import (
 
 
 # create the default data directory
-current_dir = os.path.dirname(os.path.realpath(__file__))
-base_dir = os.path.join(current_dir, "..", "..")  # go up two levels
-DATA_DIR = os.path.join(base_dir, "Datasets", "cow_mesh")
 
 
 def generate_cow_renders(
-    num_views: int = 40, data_dir: str = DATA_DIR, azimuth_range: float = 180
+    num_views: int = 40, file_name: str = "none", azimuth_range: float = 180
 ):
     """
     This function generates `num_views` renders of a cow mesh.
@@ -58,8 +55,9 @@ def generate_cow_renders(
     """
 
     # set the paths
-
-    data_dir = os.path.join(base_dir, "Datasets", "cow_mesh")
+    current_dir = os.path.dirname(os.path.realpath(__file__))
+    base_dir = os.path.join(current_dir, "..", "..")  # go up two levels
+    data_dir = os.path.join(base_dir, "Datasets", file_name)
     print(data_dir)
     
     # Setup
@@ -70,7 +68,7 @@ def generate_cow_renders(
         device = torch.device("cpu")
 
     # Load obj file
-    obj_filename = os.path.join(data_dir, "cow.obj")
+    obj_filename = os.path.join(data_dir, file_name + ".obj")
     mesh = load_objs_as_meshes([obj_filename], device=device)
 
     # We scale normalize and center the target mesh to fit in a sphere of radius 1
@@ -96,7 +94,7 @@ def generate_cow_renders(
     # viewing angles. All the cameras helper methods support mixed type inputs and
     # broadcasting. So we can view the camera from the a distance of dist=2.7, and
     # then specify elevation and azimuth angles for each viewpoint as tensors.
-    R, T = look_at_view_transform(dist=2.7, elev=elev, azim=azim)
+    R, T = look_at_view_transform(dist=2.0, elev=elev, azim=azim)
     cameras = FoVPerspectiveCameras(device=device, R=R, T=T)
 
     # Define the settings for rasterization and shading. Here we set the output
@@ -108,7 +106,7 @@ def generate_cow_renders(
     # rasterization method is used.  Refer to docs/notes/renderer.md for an
     # explanation of the difference between naive and coarse-to-fine rasterization.
     raster_settings = RasterizationSettings(
-        image_size=128, blur_radius=0.0, faces_per_pixel=1
+        image_size=126, blur_radius=0.0, faces_per_pixel=1
     )
 
     # Create a Phong renderer by composing a rasterizer and a shader. The textured

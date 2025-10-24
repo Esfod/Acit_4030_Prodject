@@ -25,7 +25,8 @@ if torch.cuda.is_available():
 else:
     device = torch.device("cpu")
 
-target_cameras, target_images, target_silhouettes = generate_cow_renders(num_views=40, azimuth_range=180) 
+mesh_dir = "rocket_mesh"
+target_cameras, target_images, target_silhouettes = generate_cow_renders(num_views=40, file_name=mesh_dir, azimuth_range=180)
 print(f'Generated {len(target_images)} images/silhouettes/cameras.')
 
 render_size = target_images.shape[1] * 2
