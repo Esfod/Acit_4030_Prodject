@@ -1,6 +1,6 @@
 import torch
 import matplotlib.pyplot as plt
-import time
+import os
 
 from pytorch3d.renderer import (
     FoVPerspectiveCameras,
@@ -38,8 +38,8 @@ raysampler_mc = MonteCarloRaysampler(
     max_x = 1.0,
     min_y = -1.0,
     max_y = 1.0,
-    n_rays_per_image=750,
-    n_pts_per_ray=128,
+    n_rays_per_image=8192,
+    n_pts_per_ray=64,
     min_depth=0.1,
     max_depth=volume_extent_world,
 )
@@ -71,87 +71,86 @@ target_silhouettes = target_silhouettes.to(device)
 neural_radiance_field = neural_radiance_field.to(device)
 
 lr = 1e-3
-optimizer = torch.optim.AdamW(neural_radiance_field.parameters(), lr=lr) 
-batch_size = 6
+batch_size = 4
 n_iter = 10000
+optimizer = torch.optim.AdamW(neural_radiance_field.parameters(), lr=lr) 
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=n_iter,eta_min=5e-6)
+
+save_dir = f'output/{mesh_dir}'
+os.makedirs(save_dir, exist_ok=True)
+
+from torch.cuda.amp import autocast, GradScaler
+
+scaler = GradScaler(enabled=(device.type == "cuda"))
 
 loss_history_color, loss_history_sil = [], []
+
 for iteration in range(n_iter):
-    if iteration == round(n_iter * 0.75):
-        print('Decreasing LR 10-fold ...')
-        optimizer = torch.optim.AdamW(
-            neural_radiance_field.parameters(), lr=lr * 0.1
+
+    # ---- sample a batch FIRST ----
+    batch_idx = torch.randperm(len(target_cameras))[:batch_size]
+    batch_cameras = FoVPerspectiveCameras(
+        R=target_cameras.R[batch_idx],
+        T=target_cameras.T[batch_idx],
+        znear=target_cameras.znear[batch_idx],
+        zfar=target_cameras.zfar[batch_idx],
+        aspect_ratio=target_cameras.aspect_ratio[batch_idx],
+        fov=target_cameras.fov[batch_idx],
+        device=device,
+    )
+
+    optimizer.zero_grad(set_to_none=True)
+
+    # Optionally anneal the silhouette weight to speed color convergence
+    sil_w = 1.0 if iteration < 3000 else 0.1
+
+    with autocast(enabled=(device.type == "cuda")):
+        rendered_images_silhouettes, sampled_rays = renderer_mc(
+            cameras=batch_cameras, volumetric_function=neural_radiance_field
+        )
+        rendered_images, rendered_silhouettes = rendered_images_silhouettes.split([3, 1], dim=-1)
+
+        silhouettes_at_rays = sample_images_at_mc_locs(
+            target_silhouettes[batch_idx, ..., None], sampled_rays.xys
+        )
+        colors_at_rays = sample_images_at_mc_locs(
+            target_images[batch_idx], sampled_rays.xys
         )
 
-    optimizer.zero_grad()
-    batch_idx = torch.randperm(len(target_cameras))[:batch_size]
+        sil_err   = huber(rendered_silhouettes, silhouettes_at_rays).abs().mean()
+        color_err = huber(rendered_images, colors_at_rays).abs().mean()
+        loss = color_err + sil_w * sil_err
 
-    batch_cameras = FoVPerspectiveCameras(
-        R = target_cameras.R[batch_idx],
-        T = target_cameras.T[batch_idx],
-        znear = target_cameras.znear[batch_idx],
-        zfar = target_cameras.zfar[batch_idx],
-        aspect_ratio = target_cameras.aspect_ratio[batch_idx],
-        fov = target_cameras.fov[batch_idx],
-        device = device)
+    # ---- single AMP backward/step ----
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
+    scheduler.step()
 
-    rendered_images_silhouettes, sampled_rays = renderer_mc(
-        cameras=batch_cameras,
-        volumetric_function=neural_radiance_field
-    )
-
-    rendered_images, rendered_silhouettes = (
-        rendered_images_silhouettes.split([3, 1], dim=-1)
-    )
-
-    silhouettes_at_rays = sample_images_at_mc_locs(
-        target_silhouettes[batch_idx, ..., None],
-        sampled_rays.xys
-    )
-
-    sil_err = huber(
-        rendered_silhouettes,
-        silhouettes_at_rays,
-    ).abs().mean()
-    colors_at_rays = sample_images_at_mc_locs(
-        target_images[batch_idx],
-        sampled_rays.xys
-    )
-
-    color_err = huber(
-        rendered_images,
-        colors_at_rays,
-    ).abs().mean()
-
-    loss = color_err + sil_err
     loss_history_color.append(float(color_err))
     loss_history_sil.append(float(sil_err))
 
-    loss.backward()
-    optimizer.step()
-
-    # Visualize the full renders every 100 iterations.
-    if iteration % 100 == 0:
-        
+    # ---- visualization (unchanged) ----
+    if iteration % 1000 == 0:
         show_idx = torch.randperm(len(target_cameras))[:1]
         fig = show_full_render(
             neural_radiance_field,
             FoVPerspectiveCameras(
-                R = target_cameras.R[show_idx], 
-                T = target_cameras.T[show_idx], 
-                znear = target_cameras.znear[show_idx],
-                zfar = target_cameras.zfar[show_idx],
-                aspect_ratio = target_cameras.aspect_ratio[show_idx],
-                fov = target_cameras.fov[show_idx],
-                device = device,
-            ), 
+                R=target_cameras.R[show_idx],
+                T=target_cameras.T[show_idx],
+                znear=target_cameras.znear[show_idx],
+                zfar=target_cameras.zfar[show_idx],
+                aspect_ratio=target_cameras.aspect_ratio[show_idx],
+                fov=target_cameras.fov[show_idx],
+                device=device,
+            ),
             target_images[show_idx][0],
             target_silhouettes[show_idx][0],
             renderer_grid,
             loss_history_color,
             loss_history_sil,
         )
-        fig.savefig(f'output/intermediate_{iteration}')
+        fig.savefig(f'{save_dir}/intermediate_{iteration}.png')
 
 #with torch.no_grad():
     #rotating_nerf_frames = generate_rotating_nerf(neural_radiance_field, target_cameras, renderer_grid, n_frames=3*5, device=device) 
