@@ -15,7 +15,7 @@ from utils.helper_functions import (generate_rotating_nerf,
                                     huber,
                                     show_full_render,
                                     sample_images_at_mc_locs)
-from nerf_model import NeuralRadianceField
+from Basic_Nerf.basic_nerf_model import NeuralRadianceField
 
 if torch.cuda.is_available():
     print(torch.cuda.get_device_name(0))
