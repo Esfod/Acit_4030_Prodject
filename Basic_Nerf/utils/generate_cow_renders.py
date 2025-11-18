@@ -106,7 +106,9 @@ def generate_cow_renders(
     # rasterization method is used.  Refer to docs/notes/renderer.md for an
     # explanation of the difference between naive and coarse-to-fine rasterization.
     raster_settings = RasterizationSettings(
-        image_size=126, blur_radius=0.0, faces_per_pixel=1
+        image_size=256, 
+        blur_radius=0.0, 
+        faces_per_pixel=1
     )
 
     # Create a Phong renderer by composing a rasterizer and a shader. The textured

@@ -15,7 +15,7 @@ from utils.helper_functions import (generate_rotating_nerf,
                                     huber,
                                     show_full_render,
                                     sample_images_at_mc_locs)
-from Basic_Nerf.basic_nerf_model import NeuralRadianceField
+from Models.basic_nerf_model import NeuralRadianceField
 
 if torch.cuda.is_available():
     print(torch.cuda.get_device_name(0))
@@ -26,7 +26,11 @@ else:
     device = torch.device("cpu")
 
 mesh_dir = "rocket_mesh"
-target_cameras, target_images, target_silhouettes = generate_cow_renders(num_views=40, file_name=mesh_dir, azimuth_range=180)
+target_cameras, target_images, target_silhouettes = generate_cow_renders(
+    num_views=50,
+      file_name=mesh_dir, 
+      azimuth_range=180,
+      )
 print(f'Generated {len(target_images)} images/silhouettes/cameras.')
 
 render_size = target_images.shape[1] * 2
@@ -38,8 +42,8 @@ raysampler_mc = MonteCarloRaysampler(
     max_x = 1.0,
     min_y = -1.0,
     max_y = 1.0,
-    n_rays_per_image=8192,
-    n_pts_per_ray=64,
+    n_rays_per_image=4096,
+    n_pts_per_ray=32,
     min_depth=0.1,
     max_depth=volume_extent_world,
 )
@@ -71,13 +75,18 @@ target_silhouettes = target_silhouettes.to(device)
 neural_radiance_field = neural_radiance_field.to(device)
 
 lr = 1e-3
-batch_size = 4
-n_iter = 10000
+batch_size = 2
+n_iter = 10001
 optimizer = torch.optim.AdamW(neural_radiance_field.parameters(), lr=lr) 
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=n_iter,eta_min=5e-6)
 
 save_dir = f'output/{mesh_dir}'
 os.makedirs(save_dir, exist_ok=True)
+
+best_model_dir = f"best_models/{mesh_dir}_basic_nerf"
+os.makedirs(best_model_dir, exist_ok=True)
+best_model_path = os.path.join(best_model_dir, f"{mesh_dir}_basic_nerf_best.pt")
+best_loss = float("inf")
 
 from torch.cuda.amp import autocast, GradScaler
 
@@ -121,6 +130,13 @@ for iteration in range(n_iter):
         color_err = huber(rendered_images, colors_at_rays).abs().mean()
         loss = color_err + sil_w * sil_err
 
+    # ---- save best model ----
+    current_loss = float(color_err.detach().item())
+    if current_loss < best_loss:
+        best_loss = current_loss
+        torch.save(neural_radiance_field.state_dict(), best_model_path)
+        print(f"[Iter {iteration}] New best model saved with color loss = {best_loss:.5f}")
+
     # ---- single AMP backward/step ----
     scaler.scale(loss).backward()
     scaler.step(optimizer)
@@ -132,6 +148,14 @@ for iteration in range(n_iter):
 
     # ---- visualization (unchanged) ----
     if iteration % 1000 == 0:
+        print(
+            f"[Iter {iteration:05d}] "
+            f"loss={loss.item():.4f} "
+            f"color={color_err.item():.4f} "
+            f"sil={sil_err.item():.4f}"
+        )
+
+
         show_idx = torch.randperm(len(target_cameras))[:1]
         fig = show_full_render(
             neural_radiance_field,
@@ -150,7 +174,7 @@ for iteration in range(n_iter):
             loss_history_color,
             loss_history_sil,
         )
-        fig.savefig(f'{save_dir}/intermediate_{iteration}.png')
+        fig.savefig(f'{save_dir}/intermediate_{iteration:05d}.png')
 
 #with torch.no_grad():
     #rotating_nerf_frames = generate_rotating_nerf(neural_radiance_field, target_cameras, renderer_grid, n_frames=3*5, device=device) 

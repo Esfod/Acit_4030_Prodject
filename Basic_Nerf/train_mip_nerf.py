@@ -19,7 +19,7 @@ from utils.helper_functions import (
     sample_images_at_mc_locs,
 )
 
-from mip_nerf import MipNeuralRadianceField
+from Models.mip_nerf import MipNeuralRadianceField
 
 if torch.cuda.is_available():
     print(torch.cuda.get_device_name(0))
@@ -30,9 +30,9 @@ else:
     device = torch.device("cpu")
     print ("Using device: ", device)
 
-mesh_dir = "cow_mesh"
+mesh_dir = "rocket_mesh"
 target_cameras, target_images, target_silhouettes = generate_cow_renders(
-    num_views = 100,
+    num_views = 50,
     file_name = mesh_dir,
     azimuth_range = 180,
 )
@@ -87,8 +87,8 @@ target_silhouettes = target_silhouettes.to(device)
 neural_radiance_field = neural_radiance_field.to(device)
 
 lr = 1e-3
-batch_size = 2
-n_iter = 10000
+batch_size = 4
+n_iter = 10001
 
 optimizer = torch.optim.AdamW(neural_radiance_field.parameters(), lr=lr)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -98,6 +98,12 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     )
 save_dir = f"output/{mesh_dir}_mip_nerf"
 os.makedirs(save_dir, exist_ok=True)
+
+best_model_dir = f"best_models/{mesh_dir}_mip_nerf"
+os.makedirs(best_model_dir, exist_ok=True)
+best_model_path = os.path.join(best_model_dir, f"{mesh_dir}_mip_nerf_best.pt")
+best_loss = float("inf")
+best_state_dict = None
 
 from torch.cuda.amp import autocast, GradScaler
 
@@ -141,11 +147,23 @@ for iteration in range(n_iter):
         sil_err = huber(rendered_silhouettes, silhouettes_at_rays).abs().mean()
         color_err = huber(rendered_images, color_at_rays).abs().mean()
         loss = color_err + sil_w * sil_err
-        
+
+    # ---- save best model ----
+    current_loss = float(color_err.detach().item())
+    if current_loss < best_loss:
+        best_loss = current_loss
+        # Keep a CPU copy of the best weights in RAM-
+        best_state_dict = {
+            k: v.detach().cpu().clone()
+            for k, v in neural_radiance_field.state_dict().items()
+        }
+        print(f"[Iter {iteration}] New best loss = {best_loss:.5f}")
+
     scaler.scale(loss).backward()
     scaler.step(optimizer)
     scaler.update()
     scheduler.step()
+
     
     loss_history_color.append(float(color_err))
     loss_history_sil.append(float(sil_err))
@@ -178,3 +196,9 @@ for iteration in range(n_iter):
         )
         fig.savefig(os.path.join(save_dir, f"iter_{iteration:05d}.png"))
         plt.close(fig)
+        
+if best_state_dict is not None:
+    torch.save(best_state_dict, best_model_path)
+    print(f"Saved best model to {best_model_path} with loss = {best_loss:.5f}")
+else:
+    print("Warning: no best_state_dict was recorded.")

@@ -1,3 +1,4 @@
+import math
 import torch
 from pytorch3d.transforms import so3_exp_map
 import matplotlib.pyplot as plt
@@ -12,6 +13,7 @@ from pytorch3d.renderer import (
     ray_bundle_to_ray_points,
 )
 
+
 def huber(x, y, scaling=0.1):
     """
     A helper function for evaluating the smooth L1 (huber) loss
@@ -20,6 +22,7 @@ def huber(x, y, scaling=0.1):
     diff_sq = (x - y) ** 2
     loss = ((1 + diff_sq / (scaling**2)).clamp(1e-4).sqrt() - 1) * float(scaling)
     return loss
+
 
 def sample_images_at_mc_locs(target_images, sampled_rays_xy):
     """
@@ -50,26 +53,20 @@ def sample_images_at_mc_locs(target_images, sampled_rays_xy):
         ba, *spatial_size, dim
     )
 
+
 def show_full_render(
-    neural_radiance_field, camera,
-    target_image, target_silhouette,
-    renderer_grid, loss_history_color,
+    neural_radiance_field,
+    camera,
+    target_image,
+    target_silhouette,
+    renderer_grid,
+    loss_history_color,
     loss_history_sil,
 ):
     """
-    This is a helper function for visualizing the
-    intermediate results of the learning. 
-    
-    Since the `NeuralRadianceField` suffers from
-    a large memory footprint, which does not let us
-    render the full image grid in a single forward pass,
-    we utilize the `NeuralRadianceField.batched_forward`
-    function in combination with disabling the gradient caching.
-    This chunks the set of emitted rays to batches and 
-    evaluates the implicit function on one batch at a time
-    to prevent GPU memory overflow.
+    Helper for visualizing intermediate learning results.
+    Uses batched_forward to stay within memory limits.
     """
-    
     # Prevent gradient caching.
     with torch.no_grad():
         # Render using the grid renderer and the
@@ -101,37 +98,83 @@ def show_full_render(
             "loss silhouette", "target image",  "target silhouette",
         )
     ):
-        if not title_.startswith('loss'):
+        if not title_.startswith("loss"):
             ax_.grid("off")
             ax_.axis("off")
         ax_.set_title(title_)
     fig.canvas.draw()
     return fig
 
-def generate_rotating_nerf(neural_radiance_field, target_cameras, renderer_grid, n_frames = 50, device=torch.device("cpu")):
+
+def generate_rotating_nerf(
+    neural_radiance_field,
+    target_cameras,
+    renderer_grid,
+    n_frames: int = 36,  # 36 frames → 10 degrees per frame over 360°
+    device: torch.device = torch.device("cpu"),
+):
+    """
+    Render a 360-degree rotation of the learned NeRF efficiently.
+
+    - Uses eval() + no_grad() to disable gradients.
+    - Uses optional AMP on GPU for faster inference.
+    - Moves frames to CPU as they are generated to free GPU memory.
+
+    Args:
+        neural_radiance_field: trained NeRF model.
+        target_cameras: reference cameras from training (for znear, zfar, fov, etc.).
+        renderer_grid: ImplicitRenderer used for final rendering.
+                       For speed, you can pass a lighter renderer (lower res, fewer pts).
+        n_frames: number of frames for the full 360° turn.
+        device: torch.device.
+
+    Returns:
+        frames_stacked: (n_frames, H, W, 3) tensor on CPU.
+    """
+    from torch.cuda.amp import autocast
+
+    neural_radiance_field.eval()
+
+    # Angles from 0 to 2π (360°), but avoid duplicating the first angle at the end
+    thetas = torch.linspace(0.0, 2.0 * math.pi, n_frames + 1, device=device)[:-1]
+
     logRs = torch.zeros(n_frames, 3, device=device)
-    logRs[:, 1] = torch.linspace(-3.14, 3.14, n_frames, device=device)
+    logRs[:, 1] = thetas
     Rs = so3_exp_map(logRs)
+
     Ts = torch.zeros(n_frames, 3, device=device)
-    Ts[:, 2] = 2.7
+    Ts[:, 2] = 2.7  # same distance as before
+
     frames = []
-    print('Rendering rotating NeRF ...')
-    for R, T in zip(tqdm(Rs), Ts):
-        camera = FoVPerspectiveCameras(
-            R=R[None], 
-            T=T[None], 
-            znear=target_cameras.znear[0],
-            zfar=target_cameras.zfar[0],
-            aspect_ratio=target_cameras.aspect_ratio[0],
-            fov=target_cameras.fov[0],
-            device=device,
-        )
-        # Note that we again render with `NDCMultinomialRaysampler`
-        # and the batched_forward function of neural_radiance_field.
-        frames.append(
-            renderer_grid(
-                cameras=camera, 
-                volumetric_function=neural_radiance_field.batched_forward,
-            )[0][..., :3]
-        )
-    return torch.cat(frames)
+    print("Rendering rotating NeRF (360°) ...")
+
+    use_amp = (device.type == "cuda")
+
+    with torch.no_grad():
+        for R, T in tqdm(zip(Rs, Ts), total=n_frames):
+            camera = FoVPerspectiveCameras(
+                R=R[None], 
+                T=T[None], 
+                znear=target_cameras.znear[0],
+                zfar=target_cameras.zfar[0],
+                aspect_ratio=target_cameras.aspect_ratio[0],
+                fov=target_cameras.fov[0],
+                device=device,
+            )
+
+            # Mixed precision on GPU to speed up rendering
+            with autocast(enabled=use_amp):
+                rendered = renderer_grid(
+                    cameras=camera, 
+                    volumetric_function=neural_radiance_field.batched_forward,
+                )[0][..., :3]
+
+            # Move each frame to CPU to free GPU memory as we go
+            frames.append(rendered.cpu())
+
+    if len(frames) == 0:
+        raise RuntimeError("No frames were rendered - check the renderer and camera setup.")
+
+    frames_stacked = torch.stack(frames, dim=0)
+    print(f"Rendered frames shape: {frames_stacked.shape}")
+    return frames_stacked
