@@ -30,7 +30,7 @@ else:
     device = torch.device("cpu")
     print ("Using device: ", device)
 
-mesh_dir = "rocket_mesh"
+mesh_dir = "sheep_mesh"
 target_cameras, target_images, target_silhouettes = generate_cow_renders(
     num_views = 50,
     file_name = mesh_dir,
@@ -87,7 +87,7 @@ target_silhouettes = target_silhouettes.to(device)
 neural_radiance_field = neural_radiance_field.to(device)
 
 lr = 1e-3
-batch_size = 4
+batch_size = 2
 n_iter = 10001
 
 optimizer = torch.optim.AdamW(neural_radiance_field.parameters(), lr=lr)
@@ -159,7 +159,7 @@ for iteration in range(n_iter):
         }
         print(f"[Iter {iteration}] New best loss = {best_loss:.5f}")
 
-    scaler.scale(loss).backward()
+    scaler.scale(color_err).backward()
     scaler.step(optimizer)
     scaler.update()
     scheduler.step()

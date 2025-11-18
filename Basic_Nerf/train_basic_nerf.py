@@ -25,7 +25,7 @@ if torch.cuda.is_available():
 else:
     device = torch.device("cpu")
 
-mesh_dir = "rocket_mesh"
+mesh_dir = "sheep_mesh"
 target_cameras, target_images, target_silhouettes = generate_cow_renders(
     num_views=50,
       file_name=mesh_dir, 
@@ -76,7 +76,7 @@ neural_radiance_field = neural_radiance_field.to(device)
 
 lr = 1e-3
 batch_size = 2
-n_iter = 10001
+n_iter = 4001
 optimizer = torch.optim.AdamW(neural_radiance_field.parameters(), lr=lr) 
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=n_iter,eta_min=5e-6)
 
@@ -138,7 +138,7 @@ for iteration in range(n_iter):
         print(f"[Iter {iteration}] New best model saved with color loss = {best_loss:.5f}")
 
     # ---- single AMP backward/step ----
-    scaler.scale(loss).backward()
+    scaler.scale(color_err).backward()
     scaler.step(optimizer)
     scaler.update()
     scheduler.step()

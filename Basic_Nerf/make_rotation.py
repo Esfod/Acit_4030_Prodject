@@ -2,6 +2,8 @@ import os
 import argparse
 import torch
 import imageio.v2 as imageio
+import numpy as np
+
 
 from pytorch3d.renderer import (
     NDCMultinomialRaysampler,
@@ -182,24 +184,31 @@ def main(args):
                     device=device,
                 )
 
-            # --- Save output as GIF instead of MP4 (no ffmpeg needed) ---
+        # Convert to numpy and uint8
+    frames_np = frames.clamp(0.0, 1.0).cpu().numpy()
+    frames_uint8 = (frames_np * 255).astype("uint8")
 
-    frames = frames.clamp(0.0, 1.0).cpu().numpy()
-    frames_uint8 = (frames * 255).astype("uint8")
+    # Create safe filename based on checkpoint path
+    rel = os.path.relpath(ckpt_path, ckpt_root_abs)          # path relative to root
+    rel_no_ext = os.path.splitext(rel)[0]                    # drop ".pt"
+    safe_name = rel_no_ext.replace(os.sep, "_")              # make filename-safe
 
-    rel = os.path.relpath(ckpt_path, ckpt_root_abs)
-    rel_no_ext = os.path.splitext(rel)[0]
-    safe_name = rel_no_ext.replace(os.sep, "_")
+    # Convert to a list of (H, W, 3) frames
+    frame_list = []
+    for f in frames_uint8:
+        f = np.squeeze(f)                    # remove extra dims like (1,1,H,W,3)
+        if f.ndim == 2:                      # grayscale → convert to RGB
+            f = np.stack([f, f, f], axis=-1)
+        frame_list.append(f)
 
+    # Save GIF
     gif_path = os.path.join(out_root_abs, safe_name + ".gif")
     os.makedirs(os.path.dirname(gif_path), exist_ok=True)
 
     print(f"Saving GIF to: {gif_path}")
+    imageio.mimsave(gif_path, frame_list, duration=1.0 / args.fps)
+    print(f"GIF saved: {os.path.exists(gif_path)}")
 
-    # duration = seconds per frame = 1 / fps
-    imageio.mimsave(gif_path, frames_uint8, duration=1.0 / args.fps)
-
-    print(f"Finished writing GIF: {os.path.exists(gif_path)}")
 
     print(f"\nTotal checkpoints found: {n_ckpts}")
     if n_ckpts == 0:
